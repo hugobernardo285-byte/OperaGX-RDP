@@ -1,4 +1,4 @@
-name: Cloud PC + AweSun + Opera GX (Ultimate Control Layout)
+name: Cloud PC + AweSun + Opera GX (Fix Download Path)
 
 on:
   workflow_dispatch:
@@ -34,14 +34,17 @@ jobs:
       - name: Download and Force Install AweSun Global Client
         run: |
           Write-Host "Fetching AweSun Global Distribution Installer..."
-          # Pulls the official global-node installation package
-          $url = "https://download.awesun.com/windows/AweSun_Client_Setup.exe"
+          # Corrected the download endpoint to the active official distribution host
+          $url = "https://sun.aweray.com/download/awesun_win_client"
           $dst = "$env:TEMP\AweSunSetup.exe"
-          Invoke-WebRequest -Uri $url -OutFile $dst
+          
+          # Attempt download with explicit TLS fallback parameters
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+          Invoke-WebRequest -Uri $url -OutFile $dst -UserAgent "Mozilla/5.0"
           
           Write-Host "Executing absolute background silent installation..."
-          # Installs quietly to system paths and registers the global connection network service
-          Start-Process $dst -ArgumentList "/S", "/allusers", "/startwithwin=1" -Wait
+          # Uses uppercase /S which maps perfectly to the NSIS engine parameters
+          Start-Process $dst -ArgumentList "/S" -Wait
           Start-Sleep -Seconds 8
           Remove-Item $dst -ErrorAction SilentlyContinue
 
@@ -112,7 +115,6 @@ jobs:
           $logPath = "C:\ProgramData\AweSun\logs\awesun_service.log"
           $deviceId = "Fetching..."
           
-          # Gives the background client a moment to shake hands with the global server cluster
           for ($i = 1; $i -le 12; $i++) {
               if (Test-Path $logPath) {
                   $logContent = Get-Content $logPath -Tail 100 -ErrorAction SilentlyContinue
@@ -121,7 +123,6 @@ jobs:
                       break
                   }
               }
-              # Fallback checks directly from local configuration file maps if logs rotate
               $cfgPath = "C:\ProgramData\AweSun\config.ini"
               if (Test-Path $cfgPath) {
                   $cfg = Get-Content $cfgPath -Raw -ErrorAction SilentlyContinue
