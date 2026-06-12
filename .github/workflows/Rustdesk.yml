@@ -34,7 +34,6 @@ jobs:
       - name: Download and Force Install RustDesk Client (Legacy Build)
         run: |
           Write-Host "Fetching Legacy unencrypted RustDesk Layout from GitHub Archive..."
-          # Fetching version 1.1.9 which preserves raw text config parameters
           $url = "https://github.com/rustdesk/rustdesk/releases/download/1.1.9/rustdesk-1.1.9-windows_x64.zip"
           $zipDst = "$env:TEMP\RustDeskLegacy.zip"
           $extractDir = "C:\Program Files\RustDesk"
@@ -46,15 +45,22 @@ jobs:
           if (-not (Test-Path $extractDir)) { New-Item -ItemType Directory -Path $extractDir -Force }
           Expand-Archive -Path $zipDst -DestinationPath $extractDir -Force
           
-          # Standardize binary layout name inside the destination path
-          if (Test-Path "$extractDir\rustdesk-1.1.9.exe") {
-              Rename-Item -Path "$extractDir\rustdesk-1.1.9.exe" -NewName "rustdesk.exe" -Force
+          # Fix for nested folders inside the zip: Find the actual .exe file deep inside the folder
+          $exeFile = Get-ChildItem -Path $extractDir -Filter "*.exe" -Recurse | Select-Object -First 1
+          if ($exeFile) {
+              Write-Host "Found binary at: $($exeFile.FullName). Moving to destination root..."
+              Move-Item -Path $exeFile.FullName -Destination "$extractDir\rustdesk.exe" -Force
           }
           
           Write-Host "Registering background system execution threads..."
           $rdExe = "$extractDir\rustdesk.exe"
-          Start-Process $rdExe -ArgumentList "--install-service" -Wait
-          Start-Sleep -Seconds 10
+          if (Test-Path $rdExe) {
+              Start-Process $rdExe -ArgumentList "--install-service" -Wait
+              Start-Sleep -Seconds 10
+          } else {
+              Write-Error "CRITICAL: Could not find or isolate the RustDesk executable!"
+              exit 1
+          }
           Remove-Item $zipDst -ErrorAction SilentlyContinue
 
       - name: Configure Unattended Security Password & Connection Profile
@@ -113,9 +119,8 @@ jobs:
           Write-Host "Scanning infrastructure maps for unencrypted plain text RustDesk keys..."
           $deviceId = "Fetching..."
           
-          # In 1.1.9, we loop until the network handshake finishes and drops the config string
+          # Loop up to 15 times to give the legacy background client enough time to handshake and populate the file
           for ($i = 1; $i -le 15; $i++) {
-              # Check the service profile's unencrypted configuration mapping
               $configPath = "C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk\config\RustDesk_local.toml"
               if (Test-Path $configPath) {
                   $content = Get-Content $configPath -Raw
@@ -125,7 +130,6 @@ jobs:
                   }
               }
               
-              # Fallback path parsing check
               $altPath = "$env:APPDATA\RustDesk\config\RustDesk_local.toml"
               if (Test-Path $altPath) {
                   $content = Get-Content $altPath -Raw
@@ -137,7 +141,7 @@ jobs:
               Start-Sleep -Seconds 2
           }
           
-          if ($deviceId -eq "Fetching...") { $deviceId = "Not Found (Network Handshake Pending)" }
+          if ($deviceId -eq "Fetching...") { $deviceId = "Not Found (Handshake Timeout)" }
           
           $ESC = [char]27
           $Green = "$ESC[32m"
