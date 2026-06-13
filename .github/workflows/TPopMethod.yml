@@ -99,36 +99,36 @@ jobs:
           # 1. Fire up RustDesk
           $rdExe = "C:\Program Files\RustDesk\rustdesk.exe"
           Start-Process -FilePath $rdExe -ErrorAction SilentlyContinue
-          Start-Sleep -Seconds 4
+          Start-Sleep -Seconds 5
 
           # 2. Launch Opera GX cleanly right after
           $publicDesktop = [Environment]::GetFolderPath("CommonDesktopDirectory")
           Start-Process "$publicDesktop\Opera GX Browser.lnk"
           Start-Sleep -Seconds 6
 
-          # 3. Use Win32 API to find the RustDesk window and pins it to the very top layer
+          # 3. Target the active RustDesk window handle from process memory and pin it
           Write-Host "Pinning RustDesk layout to the topmost visual z-index layer..."
           $signature = @'
-          [DllImport("user32.dll", SetLastError = true)]
-          public static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
-          
           [DllImport("user32.dll", SetLastError = true)]
           [return: MarshalAs(UnmanagedType.Bool)]
           public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
           '@
-          
           $win32 = Add-Type -MemberDefinition $signature -Name "TopMostUtil" -Namespace "Win32" -PassThru
           
-          # Locates the RustDesk primary UI window handle
-          $hwnd = $win32::FindWindow("CabinetWClass", "RustDesk")
-          if ($hwnd -eq [IntPtr]::Zero) { $hwnd = $win32::FindWindow( $null, "RustDesk") }
+          # Query via active process object structure directly to circumvent dynamic class tags
+          $hwnd = [IntPtr]::Zero
+          $rdProcess = Get-Process -Name "rustdesk" -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero } | Select-Object -First 1
           
-          if ($hwnd -ne [IntPtr]::Zero) {
-              # -1 represents HWND_TOPMOST; 0x0001 | 0x0002 keeps its current position and size unchanged
+          if ($rdProcess) {
+              $hwnd = $rdProcess.MainWindowHandle
+          }
+          
+          if ($hwnd -and $hwnd -ne [IntPtr]::Zero) {
+              # -1 pins window to top-most layer; 0x0001 | 0x0002 keeps original layout size and coordinates
               $win32::SetWindowPos($hwnd, [IntPtr](-1), 0, 0, 0, 0, 0x0001 -bor 0x0002) | Out-Null
               Write-Host "RustDesk successfully locked on top of the browser window display layout."
           } else {
-              Write-Warning "Could not find an active RustDesk window handle to lock."
+              Write-Warning "Could not dynamically trace the RustDesk handle from engine process memory."
           }
 
       - name: Hide Host Agent Window ONLY (Targeted Minimization)
