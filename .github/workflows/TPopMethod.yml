@@ -1,4 +1,4 @@
-name: Cloud PC + Auto-Fetch AweSun Connection
+name: Cloud PC + Release-Hosted AweSun Connection
 
 on:
   workflow_dispatch:
@@ -22,56 +22,39 @@ jobs:
     steps:
       - name: Optimize System and Disable Firewall
         run: |
-          Write-Host "Prepping environment layers..."
           Set-NetFirewallProfile -Profile Public,Private,Domain -Enabled False
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
           Start-Service -Name "TermService" -ErrorAction SilentlyContinue
 
-      - name: Force-Fetch AweSun Installer Headlessly
+      - name: Pull Installer From GitHub Release Storage
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $url = "https://download.awesun.com/windows/AweSun_Setup.exe"
-          $installer = "$env:TEMP\AweSun_Setup.exe"
+          Write-Host "Pulling AweSun executable from your Release v1.0..."
+          gh release download v1.0 --pattern "AweSun_Setup.exe" --dir "$env:TEMP"
           
-          # Built-in robust download loop (tries up to 3 times if network drops)
-          for ($i = 1; $i -le 3; $i++) {
-              try {
-                  Write-Host "Download attempt $i of 3..."
-                  [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-                  Invoke-WebRequest -Uri $url -OutFile $installer -TimeoutSec 60 -ErrorAction Stop
-                  if ((Get-Item $installer).Length -gt 10MB) {
-                      Write-Host "✅ Download complete and verified!"
-                      break
-                  }
-              } catch {
-                  Write-Warning "Attempt $i failed. Retrying in 5 seconds..."
-                  Start-Sleep -Seconds 5
-              }
+          $installer = "$env:TEMP\AweSun_Setup.exe"
+          if (Test-Path $installer) {
+              Write-Host "✅ Installer pulled successfully from release storage!"
+          } else {
+              Write-Error "CRITICAL: AweSun_Setup.exe could not be retrieved from Release v1.0. Verify the tag name and file name match perfectly."
+              exit 1
           }
 
       - name: Install AweSun Silently
         run: |
           $installer = "$env:TEMP\AweSun_Setup.exe"
-          if (Test-Path $installer) {
-              Write-Host "Executing silent structural installation..."
-              Start-Process -FilePath $installer -ArgumentList "/S", "/allusers" -Wait
-              Start-Sleep -Seconds 12
-          } else {
-              Write-Error "Could not retrieve setup binary safely."
-              exit 1
-          }
+          Start-Process -FilePath $installer -ArgumentList "/S", "/allusers" -Wait
+          Start-Sleep -Seconds 12
 
       - name: Force Start AweSun Service and Parse Credentials
         run: |
-          Write-Host "Waking up AweSun background host engine..."
           $aweSunPath = "${env:ProgramFiles}\AweSun\AweSun.exe"
-          if (-not (Test-Path $aweSunPath)) {
-              $aweSunPath = "${env:ProgramFiles (x86)}\AweSun\AweSun.exe"
-          }
+          if (-not (Test-Path $aweSunPath)) { $aweSunPath = "${env:ProgramFiles (x86)}\AweSun\AweSun.exe" }
           
           Start-Process $aweSunPath -ArgumentList "-service" -NoNewWindow
           Start-Sleep -Seconds 15
           
-          Write-Host "Extracting connection metrics..."
           $configPath = "$env:AppData\AweSun\config.ini"
           if (-not (Test-Path $configPath)) { $configPath = "C:\ProgramData\AweSun\config.ini" }
           
