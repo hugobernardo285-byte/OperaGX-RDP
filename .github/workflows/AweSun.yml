@@ -1,0 +1,108 @@
+name: AweSun RDP Automation Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      runtime_minutes:    { description: "Runtime (max 360)", required: false, default: "60" }
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  awesun-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 370
+
+    steps:
+      - name: Parse Runtime Requirements
+        run: |
+          function IntOr($v,$d){ if("$v" -match '^\d+$'){ [int]$v } else { [int]$d } }
+          $runtime = IntOr("${{ inputs.runtime_minutes }}",60)
+          if ($runtime -gt 360 -or $runtime -lt 1) { $runtime = 60 }
+          "RUNTIME_MINUTES=$runtime" | Out-File -Append $env:GITHUB_ENV
+
+      - name: Download AweSun Installer
+        run: |
+          $url = "https://download.aweray.com/awesun/AweSun_Setup.exe"
+          Invoke-WebRequest -Uri $url -OutFile "$env:TEMP\AweSun_Setup.exe"
+          Write-Host "AweSun Installer downloaded successfully to temp directory."
+
+      - name: Launch Installer & Blind-Type Keystrokes
+        run: |
+          # 1. Start the setup executable in the background
+          Write-Host "Launching AweSun process..."
+          $process = Start-Process -FilePath "$env:TEMP\AweSun_Setup.exe" -PassThru
+          
+          # 2. Open the Windows Script Host interface for keyboard simulation
+          $wshell = New-Object -ComObject WScript.Shell
+          
+          # 3. Wait up to 20 seconds for the application window to render in memory
+          Write-Host "Waiting for installer interface to load..."
+          $loaded = $false
+          for ($i = 0; $i -lt 20; $i++) {
+              if ($wshell.AppActivate("AweSun Setup") -or $wshell.AppActivate("AweSun")) {
+                  $loaded = $true
+                  break
+              }
+              Start-Sleep -Seconds 1
+          }
+          
+          if ($loaded) {
+              Write-Host "Window target found! Forcing focus and typing sequence..."
+              $wshell.AppActivate("AweSun Setup")
+              Start-Sleep -Milliseconds 750
+              
+              # --- AUTOMATION SEQUENCE ---
+              # Adjust these specific keys depending on what your screenshot reveals later!
+              $wshell.SendKeys("{ENTER}")  # Hits Enter on the default "Install Now" action
+              Write-Host "Sent primary click keystroke. Waiting for backend extraction..."
+              Start-Sleep -Seconds 10       # Give it ample time to complete the unpack
+              
+              # Try to catch and close the final post-install program dashboard if it auto-launches
+              if ($wshell.AppActivate("AweSun")) {
+                  $wshell.SendKeys("%{F4}") # Alt + F4
+                  Write-Host "Sent close command to post-install popup."
+              }
+          } else {
+              Write-Warning "Could not find or lock onto the installer window target."
+          }
+
+      - name: Capture Debug Screenshot
+        if: always()
+        run: |
+          Add-Type -AssemblyName System.Windows.Forms
+          Add-Type -AssemblyName System.Drawing
+          
+          $screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $bitmap = New-Object System.Drawing.Bitmap $screen.Width, $screen.Height
+          $graphic = [System.Drawing.Graphics]::FromImage($bitmap)
+          
+          $graphic.CopyFromScreen($screen.X, $screen.Y, 0, 0, $bitmap.Size)
+          
+          $outputPath = "$env:USERPROFILE\Desktop\installer_check.png"
+          $bitmap.Save($outputPath, [System.Drawing.Imaging.ImageFormat]::Png)
+          
+          $graphic.Dispose()
+          $bitmap.Dispose()
+          Write-Host "Saved status screenshot to: $outputPath"
+
+      - name: Upload Screenshot Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-screenshot
+          path: ~/Desktop/installer_check.png
+
+      - name: Connection Keep-Alive Loop
+        run: |
+          $mins = [int]$env:RUNTIME_MINUTES
+          $end = (Get-Date).AddMinutes($mins)
+          while ((Get-Date) -lt $end) {
+            Write-Host ("AweSun Core Engine Active | Heartbeat " + (Get-Date).ToString("HH:mm:ss") + " running until " + $end.ToString("HH:mm:ss"))
+            Start-Sleep -Seconds 60
+          }
